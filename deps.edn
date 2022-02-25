@@ -1,0 +1,4 @@
+{:paths ["src"]
+ :deps {techascent/tech.ml.dataset {:mvn/version "6.068"}
+        aerial.bio.utils/aerial.bio.utils {:mvn/version "2.0.0"}
+        criterium/criterium {:mvn/version "0.4.5"}}}

@@ -98,14 +98,25 @@
                    :else []))))
     (dtt/reshape data [rows cols]))
   ;;Slightly slower and much cleaner
-  (let [endsgap (long endsgap)]
+  #_(let [endsgap (long endsgap)]
     (-> (dtt/compute-tensor [rows cols]
                             (fn [^long i ^long j]
                               (cond (== i j 0) [:- 0 [0 0]]
                                     (== i 0) [:l (* j endsgap) [0 j]]
                                     (== j 0) [:u (* i endsgap) [i 0]]
                                     :else [])))
-        (dtype/clone))))
+        (dtype/clone)))
+  (let [endsgap (long endsgap)
+        retval (dtt/new-tensor [rows cols] :datatype :object)]
+    (dtype/set-constant! retval [])
+    (.ndWriteObject retval 0 0 [:- 0])
+    (dotimes [idx rows]
+      (when-not (== idx 0)
+        (.ndWriteObject retval idx 0 [:u (* idx endsgap)])))
+    (dotimes [idx cols]
+      (when-not (== idx 0)
+        (.ndWriteObject retval 0 idx [:l (* idx endsgap)])))
+    retval))
 
 (defn- score
   "Compute and return the best score and its direction :l for 'from
@@ -180,13 +191,12 @@
                   [:d dsc])
                 (if (> usc dsc)
                   [:u usc]
-                  [:d dsc]))
-        ;; Check if local for possible start location of [i j]
-        score (if (and (identical? kind :local)
-                       (> 0 (long (score 1))))
-                [:s 0]
-                score)]
-    (conj score [i j])))
+                  [:d dsc]))]
+    ;; Check if local for possible start location of [i j]
+    (if (and (identical? kind :local)
+             (> 0 (long (score 1))))
+      [:s 0]
+      score)))
 
 
 (defmacro do-col [scmat col e & body]
@@ -215,7 +225,7 @@
   "
   [^"[[Lclojure.lang.PersistentVector;" scmat, rows cols kind]
   (case kind
-    :global (aget scmat rows cols)
+    :global (conj (aget scmat rows cols))
     :ends-gap-free
     (let [max (volatile! (aget scmat rows cols))]
       (do-row scmat rows v
@@ -247,7 +257,7 @@
 (defn- find-start-t
   [^NDBuffer scmat rows cols kind]
   (case kind
-    :global (.ndReadObject scmat rows cols)
+    :global (conj (.ndReadObject scmat rows cols) [rows cols])
     :ends-gap-free
     (let [max (volatile! (.ndReadObject scmat rows cols))]
       (do-row-t scmat rows v
@@ -292,7 +302,6 @@
     #_(clojure.pprint/pprint (map vec (vec scmat)))
     (loop [P (list start)
            [r c] (start 2)]
-      #_(println r c P)
       (cond
         (and (= kind :global) (= r c 0)) (rest P)
         (and (not= kind :global) (= ((.ndReadObject scmat r c) 1) 0)) (rest P)
@@ -302,9 +311,9 @@
               cell (.ndReadObject scmat r c)
               dir (cell 0)
               step (case dir
-                     :d (.ndReadObject scmat (dec r) (dec c))
-                     :u (.ndReadObject scmat (dec r) c)
-                     :l (.ndReadObject scmat r (dec c))
+                     :d (conj (.ndReadObject scmat (dec r) (dec c)) [(dec r) (dec c)])
+                     :u (conj (.ndReadObject scmat (dec r) c) [(dec r) c])
+                     :l (conj (.ndReadObject scmat r (dec c)) [r (dec c)])
                      (aum/raise
                       :dash-dir? "Bad direction"
                       :cell cell :r r :c c))]
@@ -439,8 +448,9 @@
   :%same (percentage of matching base count to max size)
   :maxlen (max length of s1 and s2)"
   ^AlnhamRecord [s1 s2]
-  (let [[[score _ lens]] (align-t s1 s2 :match 1, :mmatch 0, :gap 0)
-        maxlen (->> lens (apply max) double inc)
+  (let [[[score _ lens]] (align-t s1 s2 :match 1 :mmatch 0 :gap 0)
+        maxlen (-> (max (double (lens 0)) (double (lens 1)))
+                   (inc))
         %same (-> score double (/ maxlen) roundit)]
     (AlnhamRecord. score (- maxlen (double score)) maxlen %same)))
 
@@ -509,6 +519,8 @@
   (time (def ignored (run-algo add-score-rowmap)))
   ;;  445ms
 
+  (require '[criterium.core :as crit])
+
   (crit/quick-bench (run-algo add-score-rowmap))
 ;; Evaluation count : 6 in 6 samples of 1 calls.
 ;;              Execution time mean : 449.256405 ms
@@ -523,12 +535,13 @@
   nil
 
   (crit/quick-bench (run-algo add-score-rowmap-t))
-;; Evaluation count : 6 in 6 samples of 1 calls.
-;;              Execution time mean : 189.151433 ms
-;;     Execution time std-deviation : 2.154052 ms
-;;    Execution time lower quantile : 187.459430 ms ( 2.5%)
-;;    Execution time upper quantile : 192.568238 ms (97.5%)
-;;                    Overhead used : 1.732553 ns
+  ;; Evaluation count : 12 in 6 samples of 2 calls.
+  ;;            Execution time mean : 89.751623 ms
+  ;;   Execution time std-deviation : 2.693803 ms
+  ;;  Execution time lower quantile : 87.534452 ms ( 2.5%)
+  ;;  Execution time upper quantile : 93.387664 ms (97.5%)
+  ;;                  Overhead used : 2.488366 ns
+
 
   (time (def ignored (run-algo add-score-rowmap-t)))
   ;;
